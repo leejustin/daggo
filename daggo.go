@@ -84,3 +84,63 @@ func (d *Daggo) GetRootNode(nodeID int) (*DagNode, error) {
 	}
 	return &node, nil
 }
+
+// GetDescendants returns all descendants of the given nodeID
+func (d *Daggo) GetDescendants(nodeID int) ([]DagNode, error) {
+	// Initialize a slice to hold the descendants
+	descendants := make([]DagNode, 0)
+
+	// Build a recursive query to fetch all descendants of the given node
+	query := `
+		WITH RECURSIVE cte AS (
+			SELECT *
+			FROM dag
+			WHERE parent_id = $1
+			UNION ALL
+			SELECT dag.*
+			FROM dag
+			JOIN cte ON dag.parent_id = cte.child_id
+		)
+		SELECT *
+		FROM cte
+		ORDER BY id ASC
+	`
+
+	// Execute the query and retrieve the descendants
+	err := d.db.Select(&descendants, query, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	return descendants, nil
+}
+
+// GetParents returns all parents of the given node in a slice
+func (d *Daggo) GetParents(nodeID int) ([]DagNode, error) {
+	// Initialize a slice to hold the parents
+	parents := make([]DagNode, 0)
+
+	// Build a recursive query to fetch all parents of the given node
+	query := `
+		WITH RECURSIVE cte AS (
+			SELECT *
+			FROM dag
+			WHERE child_id = $1
+			UNION ALL
+			SELECT dag.*
+			FROM dag
+			JOIN cte ON dag.child_id = cte.parent_id
+		)
+		SELECT *
+		FROM cte
+		ORDER BY id ASC
+	`
+
+	// Execute the query and retrieve the parents
+	err := d.db.Select(&parents, query, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	return parents, nil
+}
