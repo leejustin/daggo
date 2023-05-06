@@ -3,6 +3,7 @@ package daggo
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"github.com/jmoiron/sqlx"
 	"reflect"
 )
@@ -42,9 +43,10 @@ func (d *Daggo) Close() error {
 
 // GetNextChildrenNodes returns immediate children node(s) of the given node (eg. 1 level down)
 func (d *Daggo) GetNextChildrenNodes(nodeID int) ([]DagNode, error) {
+	var nodes []DagNode
+
 	// Query the database for all nodes that have the given nodeID as their parent_id
 	query := "SELECT * FROM dag WHERE parent_id = $1 ORDER BY id ASC"
-	var nodes []DagNode
 	err := sqlx.Select(d.db, &nodes, query, nodeID)
 	if err != nil {
 		return nil, err
@@ -53,19 +55,32 @@ func (d *Daggo) GetNextChildrenNodes(nodeID int) ([]DagNode, error) {
 	return nodes, nil
 }
 
-// GetParentNode returns the parent node of the given node
 func (d *Daggo) GetParentNode(nodeID int) (*DagNode, error) {
-	// Create a new instance of the node struct
-	node := reflect.New(d.nodeType).Interface()
+	var node DagNode
 
 	// Query the database for the parent of the node with the given nodeID
 	query := "SELECT * FROM dag WHERE child_id = $1"
-	err := d.db.Get(node, query, nodeID)
+	err := d.db.Get(&node, query, nodeID)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return nil, fmt.Errorf("failed to get parent node: no rows found")
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to get parent node: %v", err)
+	}
+
+	return &node, nil
+}
+
+// GetRootNode returns the root node of the given node
+func (d *Daggo) GetRootNode(nodeID int) (*DagNode, error) {
+	var node DagNode
+
+	// Query the database for the root of the node with the given nodeID
+	query := "SELECT * FROM dag WHERE root_id = $1"
+	err := d.db.Get(&node, query, nodeID)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no root node found for node %d", nodeID)
 	} else if err != nil {
 		return nil, err
 	}
-
-	return node.(*DagNode), nil
+	return &node, nil
 }
