@@ -84,3 +84,50 @@ func (d *Daggo) GetRootNode(nodeID int) (*DagNode, error) {
 	}
 	return &node, nil
 }
+
+// GetDescendants returns all descendants of the given node in the DAG.
+func (d *Daggo) GetDescendants(nodeID int) ([]DagNode, error) {
+	// Query the database for all descendants of the node with the given ID
+	query := `WITH RECURSIVE cte AS (
+				SELECT * FROM dag WHERE id = $1
+				UNION ALL
+				SELECT dag.* FROM dag JOIN cte ON dag.parent_id = cte.id
+			) SELECT * FROM cte ORDER BY id ASC`
+	nodes := []DagNode{}
+	err := sqlx.Select(d.db, &nodes, query, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+func (d *Daggo) GetParents(nodeID int) ([]DagNode, error) {
+	// Query the database for all nodes that have the given nodeID as their child_id
+	query := "WITH RECURSIVE parents AS (SELECT * FROM dag WHERE child_id = $1 UNION SELECT dag.* FROM dag INNER JOIN parents ON dag.id = parents.parent_id) SELECT id, name, root_id, parent_id FROM parents ORDER BY id ASC"
+	rows, err := d.db.Queryx(query, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Create a slice to hold the results
+	parents := make([]DagNode, 0)
+
+	// Loop through the rows and deserialize each into a new struct of the correct type
+	for rows.Next() {
+		var parent DagNode
+		err := rows.StructScan(&parent)
+		if err != nil {
+			return nil, err
+		}
+		parents = append(parents, parent)
+	}
+
+	if len(parents) == 0 {
+		return nil, fmt.Errorf("node with ID %d has no parent", nodeID)
+	}
+
+	return parents, nil
+}
+
+// TODO: check for no cycles
