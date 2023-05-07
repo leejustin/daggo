@@ -12,8 +12,14 @@ import (
 type DagNode interface {
 	GetID() int
 	GetParentID() sql.NullInt64
-	GetChildID() sql.NullInt64
+	GetChildID() sql.NullInt64 // we need to rethink all of this. A node can have more than one child
 	GetRootID() int
+}
+
+// Dag represents a tree structure of DagNodes
+type Dag struct {
+	Root  *DagNode
+	Nodes map[int]*DagNode
 }
 
 // Daggo is a wrapper around sqlx.DB object
@@ -55,6 +61,7 @@ func (d *Daggo) GetNextChildrenNodes(nodeID int) ([]DagNode, error) {
 	return nodes, nil
 }
 
+// GetParentNode returns the immediate parent node of the given node
 func (d *Daggo) GetParentNode(nodeID int) (*DagNode, error) {
 	var node DagNode
 
@@ -62,7 +69,7 @@ func (d *Daggo) GetParentNode(nodeID int) (*DagNode, error) {
 	query := "SELECT * FROM dag WHERE child_id = $1"
 	err := d.db.Get(&node, query, nodeID)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("failed to get parent node: no rows found")
+		return nil, nil // No parent node found when it's the root node
 	} else if err != nil {
 		return nil, fmt.Errorf("failed to get parent node: %v", err)
 	}
@@ -85,49 +92,64 @@ func (d *Daggo) GetRootNode(nodeID int) (*DagNode, error) {
 	return &node, nil
 }
 
-// GetDescendants returns all descendants of the given node in the DAG.
-func (d *Daggo) GetDescendants(nodeID int) ([]DagNode, error) {
-	// Query the database for all descendants of the node with the given ID
-	query := `WITH RECURSIVE cte AS (
-				SELECT * FROM dag WHERE id = $1
-				UNION ALL
-				SELECT dag.* FROM dag JOIN cte ON dag.parent_id = cte.id
-			) SELECT * FROM cte ORDER BY id ASC`
-	nodes := []DagNode{}
-	err := sqlx.Select(d.db, &nodes, query, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	return nodes, nil
-}
-
-func (d *Daggo) GetParents(nodeID int) ([]DagNode, error) {
-	// Query the database for all nodes that have the given nodeID as their child_id
-	query := "WITH RECURSIVE parents AS (SELECT * FROM dag WHERE child_id = $1 UNION SELECT dag.* FROM dag INNER JOIN parents ON dag.id = parents.parent_id) SELECT id, name, root_id, parent_id FROM parents ORDER BY id ASC"
-	rows, err := d.db.Queryx(query, nodeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	// Create a slice to hold the results
-	parents := make([]DagNode, 0)
-
-	// Loop through the rows and deserialize each into a new struct of the correct type
-	for rows.Next() {
-		var parent DagNode
-		err := rows.StructScan(&parent)
-		if err != nil {
-			return nil, err
-		}
-		parents = append(parents, parent)
-	}
-
-	if len(parents) == 0 {
-		return nil, fmt.Errorf("node with ID %d has no parent", nodeID)
-	}
-
-	return parents, nil
-}
-
 // TODO: check for no cycles
+
+// GetDescendants returns all descendants of the given nodeID
+func (d *Daggo) GetDescendants(nodeID int) ([]DagNode, error) {
+	// Initialize a slice to hold the descendants
+	descendants := make([]DagNode, 0)
+
+	// Build a recursive query to fetch all descendants of the given node
+	query := `
+		WITH RECURSIVE cte AS (
+			SELECT *
+			FROM dag
+			WHERE parent_id = $1
+			UNION ALL
+			SELECT dag.*
+			FROM dag
+			JOIN cte ON dag.parent_id = cte.child_id
+		)
+		SELECT *
+		FROM cte
+		ORDER BY id ASC
+	`
+
+	// Execute the query and retrieve the descendants
+	err := d.db.Select(&descendants, query, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	return descendants, nil
+}
+
+// GetAncestors returns all ancestors of the given node in a slice
+func (d *Daggo) GetAncestors(nodeID int) ([]DagNode, error) {
+	// Initialize a slice to hold the ancestors
+	ancestors := make([]DagNode, 0)
+
+	// Build a recursive query to fetch all ancestors of the given node
+	query := `
+		WITH RECURSIVE cte AS (
+			SELECT *
+			FROM dag
+			WHERE child_id = $1
+			UNION ALL
+			SELECT dag.*
+			FROM dag
+			JOIN cte ON dag.child_id = cte.parent_id
+		)
+		SELECT *
+		FROM cte
+		ORDER BY id ASC
+	`
+
+	// Execute the query and retrieve the ancestors
+	err := d.db.Select(&ancestors, query, nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	return ancestors, nil
+}
