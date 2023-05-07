@@ -16,6 +16,12 @@ type DagNode interface {
 	GetRootID() int
 }
 
+// Dag represents a tree structure of DagNodes
+type Dag struct {
+	Root *DagNode
+	Nodes map[int]*DagNode
+}
+
 // Daggo is a wrapper around sqlx.DB object
 type Daggo struct {
 	db       *sqlx.DB
@@ -115,12 +121,12 @@ func (d *Daggo) GetDescendants(nodeID int) ([]DagNode, error) {
 	return descendants, nil
 }
 
-// GetParents returns all parents of the given node in a slice
-func (d *Daggo) GetParents(nodeID int) ([]DagNode, error) {
-	// Initialize a slice to hold the parents
-	parents := make([]DagNode, 0)
+// GetParents returns all ancestors of the given node in a slice
+func (d *Daggo) GetAncestors(nodeID int) ([]DagNode, error) {
+	// Initialize a slice to hold the ancestors
+	ancestors := make([]DagNode, 0)
 
-	// Build a recursive query to fetch all parents of the given node
+	// Build a recursive query to fetch all ancestors of the given node
 	query := `
 		WITH RECURSIVE cte AS (
 			SELECT *
@@ -136,11 +142,67 @@ func (d *Daggo) GetParents(nodeID int) ([]DagNode, error) {
 		ORDER BY id ASC
 	`
 
-	// Execute the query and retrieve the parents
+	// Execute the query and retrieve the ancestors
 	err := d.db.Select(&parents, query, nodeID)
 	if err != nil {
 		return nil, err
 	}
 
-	return parents, nil
+	return ancestors, nil
+}
+
+// NewDag creates a new Dag object from a slice of DagNodes
+func NewDag(nodes []DagNode) *Dag {
+	dag := &Dag{Nodes: make(map[int]*DagNode)}
+
+	// Create a map of nodes
+	for i := range nodes {
+		dag.Nodes[nodes[i].GetID()] = &nodes[i]
+	}
+
+	// Find the root node
+	var root *DagNode
+	for i := range nodes {
+		if !nodes[i].GetParentID().Valid {
+			if root != nil {
+				// More than one root node exists
+				return nil
+			}
+			root = &nodes[i]
+		}
+	}
+	if root == nil {
+		// No root node found
+		return nil
+	}
+	dag.Root = root
+
+	// Set the children of each node
+	for i := range nodes {
+		if nodes[i].GetParentID().Valid {
+			parentID := nodes[i].GetParentID().Int64
+			parent, ok := dag.Nodes[int(parentID)]
+			if !ok {
+				// Parent node not found
+				return nil
+			}
+			parent.Children = append(parent.Children, &nodes[i])
+		}
+	}
+
+	return dag
+}
+// GetDescendantsTree retrieves the ancestors of a given node as a tree
+func (d *Daggo) GetDescendantsTree(nodeID int) (*Dag, error) {
+	nodes, err := d.GetDescendants(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	dag := NewDag(nodes)
+	if dag == nil {
+		return nil, errors.New("failed to create Dag tree")
+	}
+
+	return dag, nil
 }
